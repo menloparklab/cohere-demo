@@ -14,6 +14,12 @@ from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CohereRerank
 from langchain.chains import RetrievalQA
 
+from dotenv import load_dotenv
+load_dotenv()
+
+openai_api_key = os.environ.get('openai_api_key')
+cohere_api_key = os.environ.get('cohere_api_key')
+
 def download_file(url, user_id):
     # Path to the local mounted folder on the Azure VM
     folder_path = f'/content/{user_id}/'
@@ -84,9 +90,58 @@ def qdrant_search_completion(query, collection_name, filter_dict,k,with_source):
         retriever=compression_retriever,
         return_source_documents=True)
 
-    docs = qdrant.similarity_search(query=query, k=k, filter=filter_dict, embedding_func=embeddings.embed_query, collection_name=collection_name,client=client)
-    chain = load_qa_with_sources_chain(OpenAI(temperature=0,openai_api_key=openai_api_key), chain_type="stuff")
-    result = chain({"input_documents": docs, "question": query}, return_only_outputs=False)
+    # docs = qdrant.similarity_search(query=query, k=k, filter=filter_dict, embedding_func=embeddings.embed_query, collection_name=collection_name,client=client)
+    # chain = load_qa_with_sources_chain(OpenAI(temperature=0,openai_api_key=openai_api_key), chain_type="stuff")
+    # result = chain({"input_documents": docs, "question": query}, return_only_outputs=False)
 
     result = chain({"input_documents": docs, "query": query}, return_only_outputs=False)    
     return result
+
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+origins = [
+    "http://localhost",
+    "http://localhost:3000",
+    # Add more allowed origins if needed
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get('/')
+def hello_world():
+    return {"Hello": "World"}
+
+@app.post('/embed')
+async def embed(request: Request):
+    data = await request.json()
+    scope = data.get("scope")
+    department = data.get("department")
+    userid = data.get("userid")
+    filetype = data.get("filetype")
+    input_url = data.get("input_url")
+    s3_path = data.get("s3_path")
+
+    collection_name = generate_embeddings(scope, department, userid, filetype, input_url=input_url, s3_path=s3_path)
+    return {"collection_name": collection_name}
+
+@app.post('/qsearch')
+async def search(request: Request):
+    data = await request.json()
+    query = data.get("query")
+    collection_name = data.get("collection_name")
+    filter_dict = data.get("filter_dict")
+    k = data.get("k")
+    with_source = data.get("with_source")
+
+    search_result = qdrant_search_completion(query, collection_name, filter_dict, k, with_source)
+    return search_result
