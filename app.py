@@ -4,12 +4,8 @@ from langchain.document_loaders import UnstructuredURLLoader, UnstructuredFileLo
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Qdrant
 from langchain.embeddings import CohereEmbeddings
-from langchain.chains import VectorDBQAWithSourcesChain, VectorDBQA
 from langchain.llms import Cohere
-from langchain.chains.qa_with_sources import load_qa_with_sources_chain
-from langchain.chains.question_answering import load_qa_chain
 from qdrant_client import QdrantClient
-from langchain.docstore.document import Document
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CohereRerank
 from langchain.chains import RetrievalQA
@@ -22,7 +18,7 @@ cohere_api_key = os.environ.get('cohere_api_key')
 
 def download_file(url, user_id):
     # Path to the local mounted folder on the Azure VM
-    folder_path = f'/content/{user_id}/'
+    folder_path = f'/home/azureuser/mydrive/user_files/{user_id}/'
 
     # Create the folder if it doesn't exist
     os.makedirs(folder_path, exist_ok=True)
@@ -43,58 +39,52 @@ def download_file(url, user_id):
 def load_docs(filetype, userid, **kwargs):
     if filetype == 'url':
         #need to provide a list of urls to the next step
-        url_list = [kwargs['input_url']]
-        loader = UnstructuredURLLoader(url_list)
+        url_list = kwargs['url']
+        loader = UnstructuredURLLoader(urls=url_list)
     else:
-        save_path = download_file(kwargs['s3_path'], userid)
+        save_path = download_file(kwargs['url'], userid)
         loader = UnstructuredFileLoader(save_path, mode="elements")
     docs = loader.load()
+    # print(docs)
     return docs, loader
 
-def generate_embeddings(scope, department, userid, filetype, **kwargs):
+def generate_embeddings(docName, group, userid, filetype, **kwargs):
     docs, loader = load_docs(filetype, userid, **kwargs)
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=30)
+    text_splitter = CharacterTextSplitter(chunk_size=2000, chunk_overlap=30)
     texts = text_splitter.split_documents(docs)
 
-    # for i, text in enumerate(texts):
-    #     text.metadata['scope'] = scope
-    #     text.metadata['department'] = department
+    for i, text in enumerate(texts):
+        text.metadata['docName'] = docName
+        text.metadata['group'] = group
     
     embeddings = CohereEmbeddings(model="multilingual-22-12", cohere_api_key=cohere_api_key)
 
-    qdrant = Qdrant.from_documents(
-        texts,
-        embeddings,
-        location=":memory:",
-        collection_name="cohere_docs",
-    )
 
-    # qdrant = Qdrant.from_documents(texts, embeddings, host='localhost', collection_name=userid, prefer_grpc=True)
-
-    return qdrant.collection_name
+    qdrant = Qdrant.from_documents(texts, embeddings, host='localhost', collection_name=group, prefer_grpc=True)
+    joined_content = ' '.join([docu.page_content for docu in docs])
+    return qdrant.collection_name, joined_content
 
 
 
-def qdrant_search_completion(query, collection_name, filter_dict,k,with_source):
+def qdrant_search_completion(query, collection_name, filter_dict,k, with_source):
 
     client = QdrantClient("localhost", prefer_grpc=True)
     embeddings = CohereEmbeddings(model="multilingual-22-12", cohere_api_key=cohere_api_key)
     compressor = CohereRerank()
-    qdrant = Qdrant(client,collection_name, embeddings)
+    print(collection_name)
+    qdrant = Qdrant(client,collection_name=collection_name, embeddings=embeddings)
     retriever = qdrant.as_retriever()
     compression_retriever = ContextualCompressionRetriever(
         base_compressor=compressor, base_retriever=retriever
     )
     chain = RetrievalQA.from_chain_type(
-        llm=Cohere(temperature=0, cohere_api_key=cohere_api_key), 
+        llm=Cohere(temperature=0, cohere_api_key=cohere_api_key, model="command"), 
         retriever=compression_retriever,
-        return_source_documents=True)
+        return_source_documents=with_source)
 
-    # docs = qdrant.similarity_search(query=query, k=k, filter=filter_dict, embedding_func=embeddings.embed_query, collection_name=collection_name,client=client)
-    # chain = load_qa_with_sources_chain(OpenAI(temperature=0,openai_api_key=openai_api_key), chain_type="stuff")
-    # result = chain({"input_documents": docs, "question": query}, return_only_outputs=False)
-
-    result = chain({"input_documents": docs, "query": query}, return_only_outputs=False)    
+    docs = qdrant.similarity_search(query=query, k=k, filter=filter_dict)
+    print(docs)
+    result = chain({"input_documents": docs, "query": query}, return_only_outputs=True)    
     return result
 
 
@@ -102,12 +92,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
-
-origins = [
-    "http://localhost",
-    "http://localhost:3000",
-    # Add more allowed origins if needed
-]
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,15 +108,15 @@ def hello_world():
 @app.post('/embed')
 async def embed(request: Request):
     data = await request.json()
-    scope = data.get("scope")
-    department = data.get("department")
+    docName = data.get("docName")
+    group = data.get("group")
     userid = data.get("userid")
     filetype = data.get("filetype")
-    input_url = data.get("input_url")
-    s3_path = data.get("s3_path")
+    url = data.get("url")
+    # s3_path = data.get("s3_path")
 
-    collection_name = generate_embeddings(scope, department, userid, filetype, input_url=input_url, s3_path=s3_path)
-    return {"collection_name": collection_name}
+    collection_name, docs = generate_embeddings(docName, group,  userid, filetype, url=url)
+    return {"collection_name": collection_name, "extracted_text":docs}
 
 @app.post('/qsearch')
 async def search(request: Request):
