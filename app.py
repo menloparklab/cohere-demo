@@ -9,12 +9,12 @@ from qdrant_client import QdrantClient
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CohereRerank
 from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
+
 
 from dotenv import load_dotenv
 load_dotenv()
 
-openai_api_key = os.environ.get('openai_api_key')
+
 cohere_api_key = os.environ.get('cohere_api_key')
 
 def download_file(url, user_id):
@@ -81,7 +81,6 @@ def qdrant_search_completion(query, collection_name, filter_dict,k, with_source)
     )
     chain = RetrievalQA.from_chain_type(
         llm=Cohere(temperature=0.75, cohere_api_key=cohere_api_key, model="command-nightly", max_tokens="2000", truncate="END"), 
-        # llm=ChatOpenAI(temperature=0, openai_api_key="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", model="gpt-3.5-turbo-16k-0613"),
         retriever=compression_retriever,
         return_source_documents=with_source)
 
