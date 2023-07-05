@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CohereRerank
 from langchain.chains import RetrievalQA
+from langchain.chat_models import ChatOpenAI
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -62,6 +63,7 @@ def generate_embeddings(docName, group, userid, filetype, **kwargs):
 
     qdrant = Qdrant.from_documents(texts, embeddings, host='localhost', collection_name=group, prefer_grpc=True)
     joined_content = ' '.join([docu.page_content for docu in docs])
+    print("embed complete")
     return qdrant.collection_name, joined_content
 
 
@@ -70,7 +72,7 @@ def qdrant_search_completion(query, collection_name, filter_dict,k, with_source)
 
     client = QdrantClient("localhost", prefer_grpc=True)
     embeddings = CohereEmbeddings(model="multilingual-22-12", cohere_api_key=cohere_api_key)
-    compressor = CohereRerank()
+    compressor = CohereRerank(top_n=4)
     print(collection_name)
     qdrant = Qdrant(client,collection_name=collection_name, embeddings=embeddings)
     retriever = qdrant.as_retriever()
@@ -78,7 +80,8 @@ def qdrant_search_completion(query, collection_name, filter_dict,k, with_source)
         base_compressor=compressor, base_retriever=retriever
     )
     chain = RetrievalQA.from_chain_type(
-        llm=Cohere(temperature=0, cohere_api_key=cohere_api_key, model="command"), 
+        llm=Cohere(temperature=0.75, cohere_api_key=cohere_api_key, model="command-nightly", max_tokens="2000", truncate="END"), 
+        # llm=ChatOpenAI(temperature=0, openai_api_key="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", model="gpt-3.5-turbo-16k-0613"),
         retriever=compression_retriever,
         return_source_documents=with_source)
 
